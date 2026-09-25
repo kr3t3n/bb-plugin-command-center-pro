@@ -1198,6 +1198,63 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** Case-insensitive substring match against project name, title, or task key. */
+function railTextMatches(
+  query: string,
+  ...parts: Array<string | null | undefined>
+): boolean {
+  const needle = query.trim().toLowerCase();
+  if (needle === "") return true;
+  return parts.some(
+    (part) => typeof part === "string" && part.toLowerCase().includes(needle),
+  );
+}
+
+/**
+ * Filter the rail: keep a group when its project name, chief, or any architect
+ * matches; keep the chief visible when only an architect matches.
+ */
+function filterRailGroups(
+  groups: ChiefNavGroup[],
+  query: string,
+): ChiefNavGroup[] {
+  const needle = query.trim();
+  if (needle === "") return groups;
+  return groups.flatMap((group) => {
+    const projectMatches = railTextMatches(needle, group.projectName);
+    const chiefMatches = railTextMatches(
+      needle,
+      group.chief.title,
+      group.chief.taskKey,
+      group.chief.subtitle,
+      group.projectName,
+    );
+    const matchingArchitects = group.architects.filter((architect) =>
+      railTextMatches(
+        needle,
+        architect.title,
+        architect.taskKey,
+        architect.subtitle,
+        group.projectName,
+      ),
+    );
+    if (!projectMatches && !chiefMatches && matchingArchitects.length === 0) {
+      return [];
+    }
+    return [
+      {
+        ...group,
+        // Project / chief hits keep the full architect list; architect-only
+        // hits keep the chief and only the matching architects.
+        architects:
+          projectMatches || chiefMatches
+            ? group.architects
+            : matchingArchitects,
+      },
+    ];
+  });
+}
+
 /** Live match for a CSS media query — the rail behaves differently per width. */
 function useMediaQuery(query: string) {
   const [matches, setMatches] = useState(() =>
@@ -1267,6 +1324,7 @@ function ChiefPanel({ subPath }: { subPath: string }) {
   const navigate = useBbNavigate();
   const { rpc, state, isLoading, refresh } = useChiefState();
   const [isStarting, setIsStarting] = useState(false);
+  const [railQuery, setRailQuery] = useState("");
 
   // The rail hides at any width, but it hides differently. Wide: a column you
   // collapse, and the choice sticks. Phone: single-pane, so the rail is a
@@ -1289,14 +1347,39 @@ function ChiefPanel({ subPath }: { subPath: string }) {
   };
 
   useEffect(() => {
-    if (isWide || !isDrawerOpen) return;
+    if (!isRailShown) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      setDrawerOpen(false);
+      // Escape clears the rail search first; on phone an empty field still
+      // closes the drawer.
+      if (railQuery.trim() !== "") {
+        event.preventDefault();
+        setRailQuery("");
+        return;
+      }
+      if (!isWide && isDrawerOpen) setDrawerOpen(false);
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [isWide, isDrawerOpen]);
+  }, [isWide, isDrawerOpen, isRailShown, railQuery]);
+
+  const filteredGroups = filterRailGroups(state.groups, railQuery);
+  const chiefMatches =
+    state.chief === null ||
+    railTextMatches(
+      railQuery,
+      state.chief.title,
+      state.chief.taskKey,
+      state.chief.subtitle,
+      "Chief",
+    );
+  const showChief = chiefMatches;
+  const railHasQuery = railQuery.trim() !== "";
+  const railEmpty =
+    railHasQuery &&
+    !showChief &&
+    filteredGroups.length === 0 &&
+    state.groups.length + (state.chief ? 1 : 0) > 0;
 
   const allThreads: { entry: ChiefNavThread; role: string; project?: string }[] =
     [
@@ -1361,7 +1444,35 @@ function ChiefPanel({ subPath }: { subPath: string }) {
             : "absolute inset-y-0 left-0 w-[17rem] max-w-[85%] border-r shadow-lg"
         }`}
       >
-        {state.chief ? (
+        <div className="relative mb-1">
+          <Icon
+            name="Search"
+            className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+          />
+          <Input
+            type="search"
+            value={railQuery}
+            onChange={(event) => setRailQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== "Escape") return;
+              if (railQuery === "") return;
+              event.preventDefault();
+              event.stopPropagation();
+              setRailQuery("");
+            }}
+            placeholder="Search…"
+            aria-label="Search Chief's org"
+            className="h-8 pl-7 text-sm"
+          />
+        </div>
+
+        {railEmpty ? (
+          <p className="px-2 py-2 text-xs text-muted-foreground">
+            No matches for “{railQuery.trim()}”.
+          </p>
+        ) : null}
+
+        {showChief && state.chief ? (
           <RailRow
             active={isChiefOpen}
             onSelect={() => select(state.chief!.threadId)}
@@ -1374,7 +1485,8 @@ function ChiefPanel({ subPath }: { subPath: string }) {
               </span>
             </span>
           </RailRow>
-        ) : (
+        ) : null}
+        {!railHasQuery && !state.chief ? (
           <Button
             size="sm"
             className="w-full"
@@ -1383,65 +1495,70 @@ function ChiefPanel({ subPath }: { subPath: string }) {
           >
             {isStarting ? "Starting…" : "Start Chief"}
           </Button>
-        )}
+        ) : null}
 
-        <SectionLabel>
-          Project chiefs
-          {state.groups.length > 0 ? ` (${state.groups.length})` : ""}
-        </SectionLabel>
-        {state.groups.length === 0 ? (
-          <p className="px-2 text-xs text-muted-foreground">
-            None yet. Ask Chief to stand one up for a project — Chief creates and
-            manages them.
-          </p>
-        ) : (
-          state.groups.map((group) => (
-            <div key={group.projectId}>
-              <RailRow
-                active={selected === group.chief.threadId}
-                onSelect={() => select(group.chief.threadId)}
-              >
-                <StatusDot status={group.chief.status} />
-                <span className="min-w-0 flex-1">
-                  <span
-                    className={`block truncate ${
-                      group.chief.retired ? "text-muted-foreground" : ""
-                    }`}
+        {!railEmpty ? (
+          <>
+            <SectionLabel>
+              Project chiefs
+              {filteredGroups.length > 0 ? ` (${filteredGroups.length})` : ""}
+            </SectionLabel>
+            {filteredGroups.length === 0 ? (
+              <p className="px-2 text-xs text-muted-foreground">
+                {railHasQuery
+                  ? "No project chiefs match."
+                  : "None yet. Ask Chief to stand one up for a project — Chief creates and manages them."}
+              </p>
+            ) : (
+              filteredGroups.map((group) => (
+                <div key={group.projectId}>
+                  <RailRow
+                    active={selected === group.chief.threadId}
+                    onSelect={() => select(group.chief.threadId)}
                   >
-                    {group.chief.title}
-                  </span>
-                  <span className="block truncate text-xs text-muted-foreground">
-                    {group.chief.subtitle ?? group.projectName}
-                  </span>
-                </span>
-              </RailRow>
-              {group.architects.map((architect) => (
-                <RailRow
-                  key={architect.threadId}
-                  indent
-                  active={selected === architect.threadId}
-                  onSelect={() => select(architect.threadId)}
-                >
-                  <StatusDot status={architect.status} />
-                  <span
-                    className={`min-w-0 flex-1 truncate text-xs ${
-                      architect.retired
-                        ? "text-muted-foreground/70"
-                        : "text-muted-foreground"
-                    }`}
-                  >
-                    {architect.taskKey ? (
-                      <span className="mr-1 rounded bg-muted px-1 py-0.5 text-[10px] font-medium text-foreground">
-                        {architect.taskKey}
+                    <StatusDot status={group.chief.status} />
+                    <span className="min-w-0 flex-1">
+                      <span
+                        className={`block truncate ${
+                          group.chief.retired ? "text-muted-foreground" : ""
+                        }`}
+                      >
+                        {group.chief.title}
                       </span>
-                    ) : null}
-                    {architect.title}
-                  </span>
-                </RailRow>
-              ))}
-            </div>
-          ))
-        )}
+                      <span className="block truncate text-xs text-muted-foreground">
+                        {group.chief.subtitle ?? group.projectName}
+                      </span>
+                    </span>
+                  </RailRow>
+                  {group.architects.map((architect) => (
+                    <RailRow
+                      key={architect.threadId}
+                      indent
+                      active={selected === architect.threadId}
+                      onSelect={() => select(architect.threadId)}
+                    >
+                      <StatusDot status={architect.status} />
+                      <span
+                        className={`min-w-0 flex-1 truncate text-xs ${
+                          architect.retired
+                            ? "text-muted-foreground/70"
+                            : "text-muted-foreground"
+                        }`}
+                      >
+                        {architect.taskKey ? (
+                          <span className="mr-1 rounded bg-muted px-1 py-0.5 text-[10px] font-medium text-foreground">
+                            {architect.taskKey}
+                          </span>
+                        ) : null}
+                        {architect.title}
+                      </span>
+                    </RailRow>
+                  ))}
+                </div>
+              ))
+            )}
+          </>
+        ) : null}
 
         {state.needsInput.length > 0 ? (
           <>
