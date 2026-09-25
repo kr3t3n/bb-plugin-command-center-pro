@@ -16,6 +16,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   ThreadChat,
   definePluginApp,
+  experimental_useProviders,
   useBbNavigate,
   useRealtime,
   useRealtimeConnectionState,
@@ -1162,6 +1163,86 @@ function StatusDot({ status }: { status: ChiefNavThread["status"] }) {
   );
 }
 
+/**
+ * Short letter marks when the host has no logoUrl for a known provider.
+ * Unknown ids fall through to a text chip built from the provider name.
+ */
+const LOCAL_PROVIDER_MARKS: Readonly<Record<string, string>> = {
+  codex: "Cd",
+  "claude-code": "CC",
+  "acp-cursor": "Cu",
+  cursor: "Cu",
+};
+
+/** Turn a provider slug into a readable label when the directory misses it. */
+function providerLabel(providerId: string): string {
+  return providerId
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+/**
+ * The agent provider a rail row's thread runs on. Prefers the host logo from
+ * experimental_useProviders; falls back to a short local mark, then text.
+ */
+function ProviderIcon({ providerId }: { providerId: string | null }) {
+  const { providers } = experimental_useProviders();
+  const [logoFailed, setLogoFailed] = useState(false);
+  const info = providerId
+    ? providers.find((provider) => provider.id === providerId)
+    : undefined;
+  const label =
+    info?.displayName ??
+    (providerId ? providerLabel(providerId) : "Unknown provider");
+  const logoUrl = info?.logoUrl ?? null;
+
+  useEffect(() => {
+    setLogoFailed(false);
+  }, [providerId, logoUrl]);
+
+  const showLogo = logoUrl !== null && !logoFailed;
+
+  if (providerId === null) {
+    return (
+      <span
+        role="img"
+        title={label}
+        aria-label={label}
+        className="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded text-[9px] font-medium leading-none text-muted-foreground"
+      >
+        ?
+      </span>
+    );
+  }
+
+  if (showLogo) {
+    return (
+      <img
+        src={logoUrl}
+        alt=""
+        title={label}
+        aria-label={label}
+        className="mt-0.5 size-4 shrink-0 object-contain"
+        onError={() => setLogoFailed(true)}
+      />
+    );
+  }
+
+  const mark = LOCAL_PROVIDER_MARKS[providerId] ?? label.slice(0, 2);
+  return (
+    <span
+      role="img"
+      title={label}
+      aria-label={label}
+      className="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded bg-muted text-[9px] font-medium leading-none text-muted-foreground"
+    >
+      {mark}
+    </span>
+  );
+}
+
 function RailRow({
   active,
   indent,
@@ -1373,6 +1454,7 @@ function ChiefPanel({ subPath }: { subPath: string }) {
                 Your only conversation
               </span>
             </span>
+            <ProviderIcon providerId={state.chief.providerId} />
           </RailRow>
         ) : (
           <Button
@@ -1414,6 +1496,7 @@ function ChiefPanel({ subPath }: { subPath: string }) {
                     {group.chief.subtitle ?? group.projectName}
                   </span>
                 </span>
+                <ProviderIcon providerId={group.chief.providerId} />
               </RailRow>
               {group.architects.map((architect) => (
                 <RailRow
@@ -1437,6 +1520,7 @@ function ChiefPanel({ subPath }: { subPath: string }) {
                     ) : null}
                     {architect.title}
                   </span>
+                  <ProviderIcon providerId={architect.providerId} />
                 </RailRow>
               ))}
             </div>

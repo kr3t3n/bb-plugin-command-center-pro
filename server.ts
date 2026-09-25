@@ -232,6 +232,8 @@ const navThread = z.object({
   subtitle: z.string().nullable(),
   retired: z.boolean(),
   createdAt: z.number().nullable(),
+  /** Agent provider the thread runs on; null only if the live thread is gone. */
+  providerId: z.string().nullable(),
 });
 
 const chiefNeedsInputItem = z.object({
@@ -1355,6 +1357,7 @@ export default async function plugin(bb: BbPluginApi) {
       return {
         status: thread.status as z.infer<typeof threadStatus>,
         title: thread.title ?? null,
+        providerId: thread.providerId ?? null,
       };
     } catch {
       return null;
@@ -1624,6 +1627,7 @@ export default async function plugin(bb: BbPluginApi) {
             subtitle: architect.mission,
             retired: architect.retired === 1,
             createdAt: architect.created_at,
+            providerId: architectLive?.providerId ?? null,
           };
         }),
       );
@@ -1638,6 +1642,7 @@ export default async function plugin(bb: BbPluginApi) {
           subtitle: project.name,
           retired: row.retired === 1,
           createdAt: row.created_at,
+          providerId: live.providerId,
         },
         architects: architects.filter((entry) => entry.status !== null),
       });
@@ -1654,6 +1659,7 @@ export default async function plugin(bb: BbPluginApi) {
               subtitle: null,
               retired: false,
               createdAt: chief.created_at,
+              providerId: chiefLive.providerId,
             }
           : null,
       chiefProjectId: chief?.project_id ?? null,
