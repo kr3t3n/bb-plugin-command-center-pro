@@ -229,6 +229,11 @@ const navThread = z.object({
   title: z.string(),
   status: threadStatus.nullable(),
   taskKey: z.string().nullable(),
+  /**
+   * Second line under the rail label. For Chief / project chiefs: model ·
+   * effort from live thread data (null when both are unknown). For task
+   * architects: the mission text.
+   */
   subtitle: z.string().nullable(),
   retired: z.boolean(),
   createdAt: z.number().nullable(),
@@ -1419,15 +1424,58 @@ export default async function plugin(bb: BbPluginApi) {
   /** Live status for a thread; null when it is gone or unreadable. */
   async function statusOf(threadId: string) {
     try {
-      const thread = await bb.sdk.threads.get({ threadId });
+      const [thread, exec] = await Promise.all([
+        bb.sdk.threads.get({ threadId }),
+        bb.sdk.threads
+          .defaultExecutionOptions({ threadId })
+          .catch(() => null),
+      ]);
+      const model =
+        typeof exec?.model === "string" && exec.model.trim() !== ""
+          ? exec.model
+          : null;
+      const effort =
+        typeof exec?.reasoningLevel === "string" &&
+        exec.reasoningLevel.trim() !== ""
+          ? exec.reasoningLevel
+          : null;
       return {
         status: thread.status as z.infer<typeof threadStatus>,
         title: thread.title ?? null,
         providerId: thread.providerId ?? null,
+        model,
+        effort,
       };
     } catch {
       return null;
     }
+  }
+
+  /**
+   * "Opus 5.5 · high" — known parts only. Model uses the catalog label when
+   * available, else the raw id; effort is the raw reasoning level. Null when
+   * both are unknown. Provider is omitted (the rail icon already shows it).
+   */
+  function formatHarnessSubtitle(
+    providerId: string | null,
+    model: string | null,
+    effort: string | null,
+    harnesses: z.infer<typeof harnessDto>[],
+  ): string | null {
+    const harness =
+      providerId !== null
+        ? harnesses.find((entry) => entry.id === providerId)
+        : undefined;
+    const parts: string[] = [];
+    if (model !== null) {
+      parts.push(
+        harness?.models.find((entry) => entry.id === model)?.label ?? model,
+      );
+    }
+    if (effort !== null) {
+      parts.push(effort);
+    }
+    return parts.length > 0 ? parts.join(" · ") : null;
   }
 
   async function listChiefProjects() {
@@ -1673,9 +1721,12 @@ export default async function plugin(bb: BbPluginApi) {
   /** The whole org, with live thread status. Shared by rpc, tools, and cli. */
   async function roster() {
     const chief = chiefRow();
-    const chiefLive = chief ? await statusOf(chief.thread_id) : null;
-    const projects = await listChiefProjects();
-    const taskCounts = await taskCountsByBbProject();
+    const [chiefLive, projects, taskCounts, { harnesses }] = await Promise.all([
+      chief ? statusOf(chief.thread_id) : Promise.resolve(null),
+      listChiefProjects(),
+      taskCountsByBbProject(),
+      listHarnesses(),
+    ]);
     const groups: z.infer<typeof projectGroup>[] = [];
 
     for (const project of projects) {
@@ -1707,7 +1758,12 @@ export default async function plugin(bb: BbPluginApi) {
           title: live.title ?? `Project chief — ${project.name}`,
           status: live.status,
           taskKey: null,
-          subtitle: project.name,
+          subtitle: formatHarnessSubtitle(
+            live.providerId,
+            live.model,
+            live.effort,
+            harnesses,
+          ),
           retired: row.retired === 1,
           createdAt: row.created_at,
           providerId: live.providerId,
@@ -1726,7 +1782,12 @@ export default async function plugin(bb: BbPluginApi) {
               title: chiefLive.title ?? "Chief",
               status: chiefLive.status,
               taskKey: null,
-              subtitle: null,
+              subtitle: formatHarnessSubtitle(
+                chiefLive.providerId,
+                chiefLive.model,
+                chiefLive.effort,
+                harnesses,
+              ),
               retired: false,
               createdAt: chief.created_at,
               providerId: chiefLive.providerId,
@@ -3859,7 +3920,10 @@ export default async function plugin(bb: BbPluginApi) {
           }
           return {
             id: provider.id,
-            label: harnessLabel(provider.id),
+            label:
+              provider.displayName.trim() !== ""
+                ? provider.displayName
+                : harnessLabel(provider.id),
             models,
           };
         }),
