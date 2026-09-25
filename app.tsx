@@ -16,6 +16,8 @@ import { useCallback, useEffect, useState } from "react";
 import {
   ThreadChat,
   definePluginApp,
+  experimental_useAppPanel,
+  experimental_useFixedTabTarget,
   useBbNavigate,
   useRealtime,
   useRealtimeConnectionState,
@@ -34,7 +36,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useIsCompactViewport } from "@/components/ui/hooks/use-compact-viewport";
-import { Icon } from "@/components/ui/icon";
+import { Icon, type IconName } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import { useShortcut } from "@/hooks/useShortcut";
 import { useVoiceCapture } from "@/hooks/useVoiceCapture";
@@ -1255,30 +1257,79 @@ function filterRailGroups(
   });
 }
 
-type CapabilityPlugin = {
+type CapabilityAction = {
   id: string;
-  name: string;
-  version: string;
-  description: string | null;
+  title: string;
+  icon: string;
+  kind: "browser" | "terminal" | "files" | "side-chat";
   enabled: boolean;
-  status: string;
+  pluginId: string | null;
+  version: string | null;
+  description: string | null;
   cliCommand: { name: string; summary: string } | null;
 };
 
-/** Live installed-plugin inventory for the Chief capabilities rail. */
-function useCapabilities(rpc: Rpc) {
+function actionIconName(icon: string): IconName {
+  switch (icon) {
+    case "Globe":
+    case "Terminal":
+    case "Search":
+    case "SideChat":
+    case "Puzzle":
+      return icon;
+    default:
+      return "Puzzle";
+  }
+}
+
+type SideChatTarget = {
+  threadId: string;
+  sourceThreadId: string;
+};
+
+const CHIEF_PANEL_ID = "chief";
+
+const chiefActionsTab = {
+  panelId: CHIEF_PANEL_ID,
+  id: "actions",
+} as const;
+
+const chiefFilesTab = {
+  panelId: CHIEF_PANEL_ID,
+  id: "files",
+} as const;
+
+const chiefSideChatTab = {
+  panelId: CHIEF_PANEL_ID,
+  id: "side-chat",
+  experimental_target: {
+    validate(value: unknown): value is SideChatTarget {
+      if (typeof value !== "object" || value === null) return false;
+      const record = value as Record<string, unknown>;
+      return (
+        typeof record.threadId === "string" &&
+        record.threadId.length > 0 &&
+        typeof record.sourceThreadId === "string" &&
+        record.sourceThreadId.length > 0
+      );
+    },
+  },
+} as const;
+
+/** Live New-tab-style Actions for the Chief host right panel. */
+function useCapabilityActions(rpc: Rpc) {
   const connection = useRealtimeConnectionState();
-  const [plugins, setPlugins] = useState<CapabilityPlugin[]>([]);
+  const [actions, setActions] = useState<CapabilityAction[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     try {
       const result = await rpc.call("capabilities");
-      setPlugins(result.plugins);
+      setActions(result.actions);
       setError(result.error);
     } catch (err) {
-      setPlugins([]);
+      setActions([]);
       setError(String(err));
     } finally {
       setIsLoading(false);
@@ -1293,81 +1344,263 @@ function useCapabilities(rpc: Rpc) {
     if (connection === "connected") void refresh();
   }, [connection, refresh]);
 
-  return { plugins, error, isLoading, refresh };
+  return { actions, error, isLoading, refresh };
 }
 
-function CapabilitiesList({
-  plugins,
-  error,
-  isLoading,
-}: {
-  plugins: CapabilityPlugin[];
-  error: string | null;
-  isLoading: boolean;
-}) {
-  const enabledCount = plugins.filter((plugin) => plugin.enabled).length;
+/**
+ * Host-panel Actions tab — same kind of rows as the native thread right panel
+ * (Open browser, Start terminal, Search files, Start side chat), not a plugin
+ * inventory catalog. Contributing plugins that are disabled show as disabled.
+ */
+function ChiefActionsTab({ subPath }: { subPath: string }) {
+  const rpc = useRpc<typeof rpcContract>();
+  const navigate = useBbNavigate();
+  const panel = experimental_useAppPanel();
+  const { actions, error, isLoading } = useCapabilityActions(rpc);
+  const threadId = subPath.trim() !== "" ? subPath : null;
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const runAction = async (action: CapabilityAction) => {
+    if (!action.enabled || busyId !== null) return;
+    setBusyId(action.id);
+    try {
+      if (action.kind === "terminal") {
+        toast.message("Start terminal from New tab (+)", {
+          description:
+            "BB owns Terminal on this panel — open New tab in the right panel, then Start terminal.",
+        });
+        return;
+      }
+      if (action.kind === "browser") {
+        const result = await rpc.call("startBrowser");
+        if (result.error !== null) {
+          toast.error(`Could not open browser: ${result.error}`);
+          return;
+        }
+        if (result.viewerUrl !== null) {
+          const opened = navigate.openUrl(result.viewerUrl);
+          if (!opened) toast.message("Browser started", {
+            description: result.viewerUrl,
+          });
+        } else {
+          toast.success("Shared browser started");
+        }
+        return;
+      }
+      if (action.kind === "files") {
+        if (threadId === null) {
+          toast.message("Select a thread first", {
+            description: "Search files needs the open Chief thread's workspace.",
+          });
+          return;
+        }
+        panel.openFixedTab({
+          surface: { kind: "current" },
+          tab: chiefFilesTab,
+        });
+        return;
+      }
+      if (action.kind === "side-chat") {
+        if (threadId === null) {
+          toast.message("Select a thread first", {
+            description: "Side chat attaches to the open Chief thread.",
+          });
+          return;
+        }
+        const result = await rpc.call("startSideChat", { threadId });
+        if (result.threadId === null) {
+          toast.error(
+            `Could not start side chat: ${result.error ?? "unknown error"}`,
+          );
+          return;
+        }
+        const opened = panel.openFixedTab({
+          surface: { kind: "current" },
+          tab: chiefSideChatTab,
+          target: {
+            threadId: result.threadId,
+            sourceThreadId: threadId,
+          },
+        });
+        if (!opened) {
+          toast.error("Could not open the side chat tab.");
+        }
+      }
+    } finally {
+      setBusyId(null);
+    }
+  };
 
   return (
-    <>
-      <SectionLabel>
-        Capabilities
-        {plugins.length > 0
-          ? ` (${enabledCount}/${plugins.length})`
-          : ""}
-      </SectionLabel>
-      {isLoading && plugins.length === 0 ? (
+    <div className="flex h-full min-h-0 flex-col overflow-y-auto p-2">
+      <p className="px-2 pb-1 pt-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        Actions
+      </p>
+      {isLoading && actions.length === 0 ? (
         <p className="px-2 text-xs text-muted-foreground">Loading…</p>
       ) : null}
       {error ? (
         <p className="px-2 text-xs text-muted-foreground">
-          Could not read installed plugins.
+          Could not read installed capabilities.
         </p>
       ) : null}
-      {!isLoading && !error && plugins.length === 0 ? (
-        <p className="px-2 text-xs text-muted-foreground">None installed.</p>
-      ) : null}
-      {plugins.map((plugin) => (
-        <div
-          key={plugin.id}
-          className={`mt-1 rounded-md border px-2 py-1.5 ${
-            plugin.enabled
-              ? "border-border bg-card"
-              : "border-border/60 bg-muted/30 opacity-70"
-          }`}
-        >
-          <div className="flex items-baseline gap-1.5">
-            <span
-              className={`min-w-0 flex-1 truncate text-sm font-medium ${
-                plugin.enabled ? "text-foreground" : "text-muted-foreground"
+      <div className="flex flex-col gap-px">
+        {actions.map((action) => {
+          const disabled = !action.enabled || busyId !== null;
+          return (
+            <button
+              key={action.id}
+              type="button"
+              disabled={disabled}
+              onClick={() => void runAction(action)}
+              className={`flex w-full items-start gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors ${
+                disabled
+                  ? "cursor-not-allowed text-muted-foreground opacity-60"
+                  : "text-foreground hover:bg-accent/50"
               }`}
             >
-              {plugin.name}
-            </span>
-            <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
-              {plugin.version}
-            </span>
-          </div>
-          {!plugin.enabled ? (
-            <span className="mt-0.5 inline-block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-              Disabled
-            </span>
-          ) : null}
-          {plugin.description ? (
-            <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
-              {plugin.description}
-            </p>
-          ) : null}
-          {plugin.cliCommand ? (
-            <p
-              className="mt-1 truncate font-mono text-[10px] text-muted-foreground"
-              title={plugin.cliCommand.summary}
+              <Icon
+                name={actionIconName(action.icon)}
+                className="mt-0.5 size-4 shrink-0 text-muted-foreground"
+              />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-medium">{action.title}</span>
+                {!action.enabled ? (
+                  <span className="block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Disabled
+                  </span>
+                ) : null}
+                {action.description ? (
+                  <span className="mt-0.5 line-clamp-2 block text-xs text-muted-foreground">
+                    {action.description}
+                  </span>
+                ) : null}
+                <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-muted-foreground">
+                  {action.version ? (
+                    <span className="tabular-nums">v{action.version}</span>
+                  ) : null}
+                  {action.cliCommand ? (
+                    <span
+                      className="truncate font-mono"
+                      title={action.cliCommand.summary}
+                    >
+                      bb {action.cliCommand.name}
+                    </span>
+                  ) : null}
+                </span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ChiefFilesTab({ subPath }: { subPath: string }) {
+  const rpc = useRpc<typeof rpcContract>();
+  const threadId = subPath.trim() !== "" ? subPath : null;
+  const [query, setQuery] = useState("");
+  const [hits, setHits] = useState<
+    Array<{ kind: "directory" | "file"; name: string; path: string }>
+  >([]);
+  const [error, setError] = useState<string | null>(null);
+  const [isSearching, setIsSearching] = useState(false);
+
+  const search = async () => {
+    if (threadId === null || query.trim() === "") return;
+    setIsSearching(true);
+    try {
+      const result = await rpc.call("searchFiles", {
+        threadId,
+        query: query.trim(),
+      });
+      setHits(result.hits);
+      setError(result.error);
+    } catch (err) {
+      setHits([]);
+      setError(String(err));
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  return (
+    <div className="flex h-full min-h-0 flex-col gap-2 p-2">
+      <p className="px-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        Search files
+      </p>
+      {threadId === null ? (
+        <p className="px-1 text-xs text-muted-foreground">
+          Select a Chief thread to search its workspace.
+        </p>
+      ) : (
+        <>
+          <form
+            className="flex gap-1"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void search();
+            }}
+          >
+            <Input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search files…"
+              className="h-8"
+              aria-label="Search files"
+            />
+            <Button
+              type="submit"
+              size="sm"
+              disabled={isSearching || query.trim() === ""}
             >
-              bb {plugin.cliCommand.name}
-            </p>
+              {isSearching ? "…" : "Search"}
+            </Button>
+          </form>
+          {error ? (
+            <p className="px-1 text-xs text-muted-foreground">{error}</p>
           ) : null}
-        </div>
-      ))}
-    </>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {hits.map((hit) => (
+              <div
+                key={`${hit.kind}:${hit.path}`}
+                className="rounded-md px-2 py-1.5 text-xs"
+              >
+                <span className="block truncate font-medium text-foreground">
+                  {hit.name}
+                </span>
+                <span className="block truncate text-muted-foreground">
+                  {hit.path}
+                </span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function ChiefSideChatTab({ subPath }: { subPath: string }) {
+  void subPath;
+  const target = experimental_useFixedTabTarget(chiefSideChatTab);
+  if (target === null || target.target === null) {
+    return (
+      <div className="p-3 text-sm text-muted-foreground">
+        Start a side chat from Actions.
+      </div>
+    );
+  }
+  return (
+    <ThreadChat
+      key={target.target.threadId}
+      threadId={target.target.threadId}
+      variant="compact"
+      layout="contained"
+      permissionPolicy="editable"
+      className="min-h-0 h-full flex-1"
+    />
   );
 }
 
@@ -1513,11 +1746,6 @@ function useChiefState() {
 function ChiefPanel({ subPath }: { subPath: string }) {
   const navigate = useBbNavigate();
   const { rpc, state, isLoading, refresh } = useChiefState();
-  const {
-    plugins: capabilities,
-    error: capabilitiesError,
-    isLoading: capabilitiesLoading,
-  } = useCapabilities(rpc);
   const [isStarting, setIsStarting] = useState(false);
   const [railQuery, setRailQuery] = useState("");
   const { expanded, expand, toggle } = useExpandedProjects();
@@ -1529,32 +1757,8 @@ function ChiefPanel({ subPath }: { subPath: string }) {
   const [isRailPinned, setRailPinned] = useRailPreference("rail-visible", true);
   const [isDrawerOpen, setDrawerOpen] = useState(false);
   const isRailShown = isWide ? isRailPinned : isDrawerOpen;
-
-  // Right-hand capabilities rail: same persistence model as the left org rail.
-  const [isCapsPinned, setCapsPinned] = useRailPreference(
-    "capabilities-visible",
-    true,
-  );
-  const [isCapsDrawerOpen, setCapsDrawerOpen] = useState(false);
-  const isCapsShown = isWide ? isCapsPinned : isCapsDrawerOpen;
-
-  const toggleRail = () => {
-    if (isWide) {
-      setRailPinned(!isRailPinned);
-      return;
-    }
-    setDrawerOpen(!isDrawerOpen);
-    if (!isDrawerOpen) setCapsDrawerOpen(false);
-  };
-
-  const toggleCaps = () => {
-    if (isWide) {
-      setCapsPinned(!isCapsPinned);
-      return;
-    }
-    setCapsDrawerOpen(!isCapsDrawerOpen);
-    if (!isCapsDrawerOpen) setDrawerOpen(false);
-  };
+  const toggleRail = () =>
+    isWide ? setRailPinned(!isRailPinned) : setDrawerOpen(!isDrawerOpen);
 
   // The open thread lives in the route, so a conversation is deep-linkable and
   // browser back walks the rail. Chief is the default.
@@ -1564,7 +1768,6 @@ function ChiefPanel({ subPath }: { subPath: string }) {
     // Only a drawer is in the way of what you just opened; a pinned column
     // stays put.
     setDrawerOpen(false);
-    setCapsDrawerOpen(false);
   };
 
   // Keep the group that owns the open thread expanded so architects stay
@@ -1580,24 +1783,21 @@ function ChiefPanel({ subPath }: { subPath: string }) {
   }, [selected, state.groups, expand]);
 
   useEffect(() => {
-    if (!isRailShown && !isCapsDrawerOpen) return;
+    if (!isRailShown) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       // Escape clears the rail search first; on phone an empty field still
-      // closes the drawers.
+      // closes the drawer.
       if (railQuery.trim() !== "") {
         event.preventDefault();
         setRailQuery("");
         return;
       }
-      if (!isWide) {
-        setDrawerOpen(false);
-        setCapsDrawerOpen(false);
-      }
+      if (!isWide) setDrawerOpen(false);
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [isWide, isDrawerOpen, isCapsDrawerOpen, isRailShown, railQuery]);
+  }, [isWide, isDrawerOpen, isRailShown, railQuery]);
 
   const filteredGroups = filterRailGroups(state.groups, railQuery);
   const chiefMatches =
@@ -1663,7 +1863,7 @@ function ChiefPanel({ subPath }: { subPath: string }) {
     ? `${open.entry.taskKey ? `${open.entry.taskKey} — ` : ""}${openTitle}`
     : "Chief";
 
-  const phoneDrawerOpen = !isWide && (isDrawerOpen || isCapsDrawerOpen);
+  const phoneDrawerOpen = !isWide && isDrawerOpen;
 
   return (
     <div className="relative flex h-full min-h-0 w-full">
@@ -1671,11 +1871,8 @@ function ChiefPanel({ subPath }: { subPath: string }) {
       {phoneDrawerOpen ? (
         <button
           type="button"
-          aria-label="Close the panel"
-          onClick={() => {
-            setDrawerOpen(false);
-            setCapsDrawerOpen(false);
-          }}
+          aria-label="Close the list"
+          onClick={() => setDrawerOpen(false)}
           className="absolute inset-0 z-10 bg-background/60"
         />
       ) : null}
@@ -1973,20 +2170,6 @@ function ChiefPanel({ subPath }: { subPath: string }) {
               </Button>
             </div>
           ) : null}
-          <Button
-            size="sm"
-            variant="ghost"
-            className="shrink-0"
-            aria-label={
-              isCapsShown ? "Hide capabilities" : "Show capabilities"
-            }
-            aria-expanded={isCapsShown}
-            onClick={toggleCaps}
-          >
-            <span aria-hidden className="text-base leading-none">
-              {isCapsShown ? "⟩" : "⧉"}
-            </span>
-          </Button>
         </div>
 
         {selected ? (
@@ -2020,22 +2203,6 @@ function ChiefPanel({ subPath }: { subPath: string }) {
           </div>
         )}
       </section>
-
-      <aside
-        className={`z-20 min-w-0 flex-col overflow-y-auto border-border bg-background p-2 ${
-          isCapsShown ? "flex" : "hidden"
-        } ${
-          isWide
-            ? "static w-64 shrink-0 border-l"
-            : "absolute inset-y-0 right-0 w-[17rem] max-w-[85%] border-l shadow-lg"
-        }`}
-      >
-        <CapabilitiesList
-          plugins={capabilities}
-          error={capabilitiesError}
-          isLoading={capabilitiesLoading}
-        />
-      </aside>
     </div>
   );
 }
@@ -2101,5 +2268,30 @@ export default definePluginApp((app) => {
     path: "chief",
     component: ChiefPanel,
     headerContent: ChiefHeader,
+    // Host-owned right panel (same chrome as thread pages). Do not mount a
+    // second panel layout inside ChiefPanel — BB owns Browser/Terminal New tab.
+    fixedTabs: [
+      {
+        ...chiefActionsTab,
+        title: "Actions",
+        icon: "PanelRight",
+        component: ChiefActionsTab,
+        layout: "flush",
+      },
+      {
+        ...chiefFilesTab,
+        title: "Search files",
+        icon: "Search",
+        component: ChiefFilesTab,
+        layout: "flush",
+      },
+      {
+        ...chiefSideChatTab,
+        title: "Side chat",
+        icon: "SideChat",
+        component: ChiefSideChatTab,
+        layout: "flush",
+      },
+    ],
   });
 });
