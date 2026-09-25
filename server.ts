@@ -481,23 +481,62 @@ export const rpcContract = defineRpcContract({
     }),
   },
   /**
-   * Installed BB plugins for the Chief capabilities rail. Live from the host
-   * via `bb.sdk.plugins.list()` — never a hard-coded inventory.
+   * Right-panel Actions for Chief: the same kind of rows as the native thread
+   * New-tab list (browser, terminal, search files, side chat), gated on the
+   * live installed-plugin inventory from `bb.sdk.plugins.list()`.
    */
   capabilities: {
     input: z.null(),
     output: z.object({
-      plugins: z.array(
+      actions: z.array(
         z.object({
           id: z.string(),
-          name: z.string(),
-          version: z.string(),
-          description: z.string().nullable(),
+          title: z.string(),
+          icon: z.string(),
+          kind: z.enum(["browser", "terminal", "files", "side-chat"]),
+          /** False when the contributing plugin is installed but disabled. */
           enabled: z.boolean(),
-          status: z.string(),
+          pluginId: z.string().nullable(),
+          version: z.string().nullable(),
+          description: z.string().nullable(),
           cliCommand: z
             .object({ name: z.string(), summary: z.string() })
             .nullable(),
+        }),
+      ),
+      error: z.string().nullable(),
+    }),
+  },
+  /** Start a side-chat fork for a Chief-selected thread (side-chat plugin). */
+  startSideChat: {
+    input: z.object({ threadId: z.string().min(1) }).strict(),
+    output: z.object({
+      threadId: z.string().nullable(),
+      error: z.string().nullable(),
+    }),
+  },
+  /** Spin the shared browser and return a viewer URL when available. */
+  startBrowser: {
+    input: z.null(),
+    output: z.object({
+      viewerUrl: z.string().nullable(),
+      error: z.string().nullable(),
+    }),
+  },
+  /** Workspace file search for a thread via the file-explorer plugin. */
+  searchFiles: {
+    input: z
+      .object({
+        threadId: z.string().min(1),
+        query: z.string().trim().min(1).max(256),
+      })
+      .strict(),
+    output: z.object({
+      hits: z.array(
+        z.object({
+          kind: z.enum(["directory", "file"]),
+          name: z.string(),
+          path: z.string(),
         }),
       ),
       error: z.string().nullable(),
@@ -4359,26 +4398,137 @@ export default async function plugin(bb: BbPluginApi) {
     async capabilities() {
       try {
         const { plugins } = await bb.sdk.plugins.list();
-        const slim = plugins.map((entry) => ({
-          id: entry.id,
-          name: entry.name?.trim() || entry.id,
-          version: entry.version,
-          description: entry.description,
-          enabled: entry.enabled,
-          status: entry.status,
-          cliCommand: entry.cliCommand
-            ? { name: entry.cliCommand.name, summary: entry.cliCommand.summary }
-            : null,
-        }));
-        // Enabled first, then name — matches how the Captain scans the panel.
-        slim.sort((a, b) => {
+        const byId = new Map(plugins.map((entry) => [entry.id, entry]));
+
+        const fromPlugin = (
+          pluginId: string,
+          id: string,
+          title: string,
+          icon: string,
+          kind: "browser" | "files" | "side-chat",
+        ) => {
+          const entry = byId.get(pluginId);
+          if (entry === undefined) return null;
+          return {
+            id,
+            title,
+            icon,
+            kind,
+            enabled: entry.enabled,
+            pluginId,
+            version: entry.version,
+            description: entry.description,
+            cliCommand: entry.cliCommand
+              ? {
+                  name: entry.cliCommand.name,
+                  summary: entry.cliCommand.summary,
+                }
+              : null,
+          };
+        };
+
+        // Same shape as the native thread New-tab Actions list. Terminal is a
+        // host tool on every plugin page; the others come from installed plugins.
+        const actions = [
+          fromPlugin(
+            "shared-browser",
+            "open-browser",
+            "Open browser",
+            "Globe",
+            "browser",
+          ),
+          {
+            id: "start-terminal",
+            title: "Start terminal",
+            icon: "Terminal",
+            kind: "terminal" as const,
+            enabled: true,
+            pluginId: null,
+            version: null,
+            description:
+              "Open a terminal on a connected machine (New tab in this panel).",
+            cliCommand: null,
+          },
+          fromPlugin(
+            "file-explorer",
+            "search-files",
+            "Search files",
+            "Search",
+            "files",
+          ),
+          fromPlugin(
+            "side-chat",
+            "start-side-chat",
+            "Start side chat",
+            "SideChat",
+            "side-chat",
+          ),
+        ].filter((action): action is NonNullable<typeof action> => action !== null);
+
+        // Enabled first, then title — matches how the Captain scans Actions.
+        actions.sort((a, b) => {
           if (a.enabled !== b.enabled) return a.enabled ? -1 : 1;
-          return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+          return a.title.localeCompare(b.title, undefined, {
+            sensitivity: "base",
+          });
         });
-        return { plugins: slim, error: null };
+        return { actions, error: null };
       } catch (error) {
-        bb.log.warn(`could not list installed plugins: ${String(error)}`);
-        return { plugins: [], error: String(error) };
+        bb.log.warn(`could not list capability actions: ${String(error)}`);
+        return { actions: [], error: String(error) };
+      }
+    },
+    async startSideChat({ threadId }) {
+      try {
+        const result = await bb.sdk.plugins.callRpc({
+          pluginId: "side-chat",
+          method: "createSideChat",
+          input: { sourceThreadId: threadId, anchorText: "" },
+          outputSchema: z.object({ threadId: z.string() }),
+        });
+        return { threadId: result.threadId, error: null };
+      } catch (error) {
+        return { threadId: null, error: String(error) };
+      }
+    },
+    async startBrowser() {
+      try {
+        const result = await bb.sdk.plugins.callRpc({
+          pluginId: "shared-browser",
+          method: "start",
+          input: { mode: "shared" },
+          outputSchema: z.object({
+            viewerUrl: z.string().nullable(),
+            state: z.unknown(),
+            axiHint: z.string(),
+          }),
+        });
+        return { viewerUrl: result.viewerUrl, error: null };
+      } catch (error) {
+        return { viewerUrl: null, error: String(error) };
+      }
+    },
+    async searchFiles({ threadId, query }) {
+      try {
+        const result = await bb.sdk.plugins.callRpc({
+          pluginId: "file-explorer",
+          method: "searchFiles",
+          input: { threadId, query, limit: 40 },
+          outputSchema: z.object({
+            hits: z.array(
+              z.object({
+                kind: z.enum(["directory", "file"]),
+                name: z.string(),
+                path: z.string(),
+              }),
+            ),
+            truncated: z.boolean().optional(),
+            context: z.unknown().optional(),
+          }),
+        });
+        return { hits: result.hits, error: null };
+      } catch (error) {
+        return { hits: [], error: String(error) };
       }
     },
     ensureChief: () => ensureChief(),
