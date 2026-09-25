@@ -2026,9 +2026,11 @@ function ChiefPanel({ subPath }: { subPath: string }) {
             <StatusDot status={state.chief.status} />
             <span className="min-w-0 flex-1">
               <span className="block truncate font-medium">Chief</span>
-              <span className="block truncate text-xs text-muted-foreground">
-                Your only conversation
-              </span>
+              {state.chief.subtitle ? (
+                <span className="block truncate text-xs text-muted-foreground">
+                  {state.chief.subtitle}
+                </span>
+              ) : null}
             </span>
             <ProviderIcon providerId={state.chief.providerId} />
           </RailRow>
@@ -2111,9 +2113,11 @@ function ChiefPanel({ subPath }: { subPath: string }) {
                           group.projectName,
                         )}
                       </span>
-                      <span className="block truncate text-xs text-muted-foreground">
-                        {group.chief.subtitle ?? group.projectName}
-                      </span>
+                      {group.chief.subtitle ? (
+                        <span className="block truncate text-xs text-muted-foreground">
+                          {group.chief.subtitle}
+                        </span>
+                      ) : null}
                     </span>
                     {group.activeCount > 0 || group.pendingCount > 0 ? (
                       <span
