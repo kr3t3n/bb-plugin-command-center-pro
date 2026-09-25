@@ -1198,6 +1198,122 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
+type CapabilityPlugin = {
+  id: string;
+  name: string;
+  version: string;
+  description: string | null;
+  enabled: boolean;
+  status: string;
+  cliCommand: { name: string; summary: string } | null;
+};
+
+/** Live installed-plugin inventory for the Chief capabilities rail. */
+function useCapabilities(rpc: Rpc) {
+  const connection = useRealtimeConnectionState();
+  const [plugins, setPlugins] = useState<CapabilityPlugin[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const refresh = useCallback(async () => {
+    try {
+      const result = await rpc.call("capabilities");
+      setPlugins(result.plugins);
+      setError(result.error);
+    } catch (err) {
+      setPlugins([]);
+      setError(String(err));
+    } finally {
+      setIsLoading(false);
+    }
+  }, [rpc]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    if (connection === "connected") void refresh();
+  }, [connection, refresh]);
+
+  return { plugins, error, isLoading, refresh };
+}
+
+function CapabilitiesList({
+  plugins,
+  error,
+  isLoading,
+}: {
+  plugins: CapabilityPlugin[];
+  error: string | null;
+  isLoading: boolean;
+}) {
+  const enabledCount = plugins.filter((plugin) => plugin.enabled).length;
+
+  return (
+    <>
+      <SectionLabel>
+        Capabilities
+        {plugins.length > 0
+          ? ` (${enabledCount}/${plugins.length})`
+          : ""}
+      </SectionLabel>
+      {isLoading && plugins.length === 0 ? (
+        <p className="px-2 text-xs text-muted-foreground">Loading…</p>
+      ) : null}
+      {error ? (
+        <p className="px-2 text-xs text-muted-foreground">
+          Could not read installed plugins.
+        </p>
+      ) : null}
+      {!isLoading && !error && plugins.length === 0 ? (
+        <p className="px-2 text-xs text-muted-foreground">None installed.</p>
+      ) : null}
+      {plugins.map((plugin) => (
+        <div
+          key={plugin.id}
+          className={`mt-1 rounded-md border px-2 py-1.5 ${
+            plugin.enabled
+              ? "border-border bg-card"
+              : "border-border/60 bg-muted/30 opacity-70"
+          }`}
+        >
+          <div className="flex items-baseline gap-1.5">
+            <span
+              className={`min-w-0 flex-1 truncate text-sm font-medium ${
+                plugin.enabled ? "text-foreground" : "text-muted-foreground"
+              }`}
+            >
+              {plugin.name}
+            </span>
+            <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+              {plugin.version}
+            </span>
+          </div>
+          {!plugin.enabled ? (
+            <span className="mt-0.5 inline-block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              Disabled
+            </span>
+          ) : null}
+          {plugin.description ? (
+            <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
+              {plugin.description}
+            </p>
+          ) : null}
+          {plugin.cliCommand ? (
+            <p
+              className="mt-1 truncate font-mono text-[10px] text-muted-foreground"
+              title={plugin.cliCommand.summary}
+            >
+              bb {plugin.cliCommand.name}
+            </p>
+          ) : null}
+        </div>
+      ))}
+    </>
+  );
+}
+
 /** Live match for a CSS media query — the rail behaves differently per width. */
 function useMediaQuery(query: string) {
   const [matches, setMatches] = useState(() =>
@@ -1266,6 +1382,11 @@ function useChiefState() {
 function ChiefPanel({ subPath }: { subPath: string }) {
   const navigate = useBbNavigate();
   const { rpc, state, isLoading, refresh } = useChiefState();
+  const {
+    plugins: capabilities,
+    error: capabilitiesError,
+    isLoading: capabilitiesLoading,
+  } = useCapabilities(rpc);
   const [isStarting, setIsStarting] = useState(false);
 
   // The rail hides at any width, but it hides differently. Wide: a column you
@@ -1275,8 +1396,32 @@ function ChiefPanel({ subPath }: { subPath: string }) {
   const [isRailPinned, setRailPinned] = useRailPreference("rail-visible", true);
   const [isDrawerOpen, setDrawerOpen] = useState(false);
   const isRailShown = isWide ? isRailPinned : isDrawerOpen;
-  const toggleRail = () =>
-    isWide ? setRailPinned(!isRailPinned) : setDrawerOpen(!isDrawerOpen);
+
+  // Right-hand capabilities rail: same persistence model as the left org rail.
+  const [isCapsPinned, setCapsPinned] = useRailPreference(
+    "capabilities-visible",
+    true,
+  );
+  const [isCapsDrawerOpen, setCapsDrawerOpen] = useState(false);
+  const isCapsShown = isWide ? isCapsPinned : isCapsDrawerOpen;
+
+  const toggleRail = () => {
+    if (isWide) {
+      setRailPinned(!isRailPinned);
+      return;
+    }
+    setDrawerOpen(!isDrawerOpen);
+    if (!isDrawerOpen) setCapsDrawerOpen(false);
+  };
+
+  const toggleCaps = () => {
+    if (isWide) {
+      setCapsPinned(!isCapsPinned);
+      return;
+    }
+    setCapsDrawerOpen(!isCapsDrawerOpen);
+    if (!isCapsDrawerOpen) setDrawerOpen(false);
+  };
 
   // The open thread lives in the route, so a conversation is deep-linkable and
   // browser back walks the rail. Chief is the default.
@@ -1286,17 +1431,19 @@ function ChiefPanel({ subPath }: { subPath: string }) {
     // Only a drawer is in the way of what you just opened; a pinned column
     // stays put.
     setDrawerOpen(false);
+    setCapsDrawerOpen(false);
   };
 
   useEffect(() => {
-    if (isWide || !isDrawerOpen) return;
+    if (isWide || (!isDrawerOpen && !isCapsDrawerOpen)) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       setDrawerOpen(false);
+      setCapsDrawerOpen(false);
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [isWide, isDrawerOpen]);
+  }, [isWide, isDrawerOpen, isCapsDrawerOpen]);
 
   const allThreads: { entry: ChiefNavThread; role: string; project?: string }[] =
     [
@@ -1340,14 +1487,19 @@ function ChiefPanel({ subPath }: { subPath: string }) {
     ? `${open.entry.taskKey ? `${open.entry.taskKey} — ` : ""}${open.entry.title}`
     : "Chief";
 
+  const phoneDrawerOpen = !isWide && (isDrawerOpen || isCapsDrawerOpen);
+
   return (
     <div className="relative flex h-full min-h-0 w-full">
       {/* Scrim: only ever present while a phone drawer is over the chat. */}
-      {!isWide && isDrawerOpen ? (
+      {phoneDrawerOpen ? (
         <button
           type="button"
-          aria-label="Close the list"
-          onClick={() => setDrawerOpen(false)}
+          aria-label="Close the panel"
+          onClick={() => {
+            setDrawerOpen(false);
+            setCapsDrawerOpen(false);
+          }}
           className="absolute inset-0 z-10 bg-background/60"
         />
       ) : null}
@@ -1532,6 +1684,20 @@ function ChiefPanel({ subPath }: { subPath: string }) {
               </Button>
             </div>
           ) : null}
+          <Button
+            size="sm"
+            variant="ghost"
+            className="shrink-0"
+            aria-label={
+              isCapsShown ? "Hide capabilities" : "Show capabilities"
+            }
+            aria-expanded={isCapsShown}
+            onClick={toggleCaps}
+          >
+            <span aria-hidden className="text-base leading-none">
+              {isCapsShown ? "⟩" : "⧉"}
+            </span>
+          </Button>
         </div>
 
         {selected ? (
@@ -1565,6 +1731,22 @@ function ChiefPanel({ subPath }: { subPath: string }) {
           </div>
         )}
       </section>
+
+      <aside
+        className={`z-20 min-w-0 flex-col overflow-y-auto border-border bg-background p-2 ${
+          isCapsShown ? "flex" : "hidden"
+        } ${
+          isWide
+            ? "static w-64 shrink-0 border-l"
+            : "absolute inset-y-0 right-0 w-[17rem] max-w-[85%] border-l shadow-lg"
+        }`}
+      >
+        <CapabilitiesList
+          plugins={capabilities}
+          error={capabilitiesError}
+          isLoading={capabilitiesLoading}
+        />
+      </aside>
     </div>
   );
 }

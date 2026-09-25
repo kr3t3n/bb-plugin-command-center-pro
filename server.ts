@@ -474,6 +474,29 @@ export const rpcContract = defineRpcContract({
       needsInputError: z.string().nullable(),
     }),
   },
+  /**
+   * Installed BB plugins for the Chief capabilities rail. Live from the host
+   * via `bb.sdk.plugins.list()` — never a hard-coded inventory.
+   */
+  capabilities: {
+    input: z.null(),
+    output: z.object({
+      plugins: z.array(
+        z.object({
+          id: z.string(),
+          name: z.string(),
+          version: z.string(),
+          description: z.string().nullable(),
+          enabled: z.boolean(),
+          status: z.string(),
+          cliCommand: z
+            .object({ name: z.string(), summary: z.string() })
+            .nullable(),
+        }),
+      ),
+      error: z.string().nullable(),
+    }),
+  },
   ensureChief: {
     input: z.null(),
     output: z.object({ threadId: z.string(), created: z.boolean() }),
@@ -4248,6 +4271,31 @@ export default async function plugin(bb: BbPluginApi) {
         needsInput: inbox.items,
         needsInputError: inbox.error,
       };
+    },
+    async capabilities() {
+      try {
+        const { plugins } = await bb.sdk.plugins.list();
+        const slim = plugins.map((entry) => ({
+          id: entry.id,
+          name: entry.name?.trim() || entry.id,
+          version: entry.version,
+          description: entry.description,
+          enabled: entry.enabled,
+          status: entry.status,
+          cliCommand: entry.cliCommand
+            ? { name: entry.cliCommand.name, summary: entry.cliCommand.summary }
+            : null,
+        }));
+        // Enabled first, then name — matches how the Captain scans the panel.
+        slim.sort((a, b) => {
+          if (a.enabled !== b.enabled) return a.enabled ? -1 : 1;
+          return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+        });
+        return { plugins: slim, error: null };
+      } catch (error) {
+        bb.log.warn(`could not list installed plugins: ${String(error)}`);
+        return { plugins: [], error: String(error) };
+      }
     },
     ensureChief: () => ensureChief(),
     async adoptChief({ threadId }) {
