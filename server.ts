@@ -230,9 +230,9 @@ const navThread = z.object({
   status: threadStatus.nullable(),
   taskKey: z.string().nullable(),
   /**
-   * Second line under the rail label. For Chief / project chiefs: provider ·
-   * model · effort from live thread data (null when all three are unknown).
-   * For task architects: the mission text.
+   * Second line under the rail label. For Chief / project chiefs: model ·
+   * effort from live thread data (null when both are unknown). For task
+   * architects: the mission text.
    */
   subtitle: z.string().nullable(),
   retired: z.boolean(),
@@ -1452,8 +1452,9 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   /**
-   * "Claude Code · Opus 5.5 · high" — known parts only, catalog labels when
-   * available, raw ids as fallback. Null when nothing is known.
+   * "Opus 5.5 · high" — known parts only. Model uses the catalog label when
+   * available, else the raw id; effort is the raw reasoning level. Null when
+   * both are unknown. Provider is omitted (the rail icon already shows it).
    */
   function formatHarnessSubtitle(
     providerId: string | null,
@@ -1466,9 +1467,6 @@ export default async function plugin(bb: BbPluginApi) {
         ? harnesses.find((entry) => entry.id === providerId)
         : undefined;
     const parts: string[] = [];
-    if (providerId !== null) {
-      parts.push(harness?.label ?? harnessLabel(providerId));
-    }
     if (model !== null) {
       parts.push(
         harness?.models.find((entry) => entry.id === model)?.label ?? model,
