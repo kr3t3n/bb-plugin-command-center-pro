@@ -1238,6 +1238,64 @@ function useRailPreference(key: string, fallback: boolean) {
   return [isVisible, set] as const;
 }
 
+/**
+ * Which project-chief groups show their architects. Persisted per project id
+ * so collapsing one stays collapsed across refreshes; the open thread's group
+ * is forced open separately.
+ */
+function useExpandedProjects() {
+  const storageKey = "bb-plugin-command-center:chief-expanded-projects";
+  const [expanded, setExpanded] = useState<Set<string>>(() => {
+    try {
+      const raw = window.localStorage.getItem(storageKey);
+      if (!raw) return new Set();
+      const parsed: unknown = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return new Set();
+      return new Set(
+        parsed.filter((id): id is string => typeof id === "string"),
+      );
+    } catch {
+      return new Set();
+    }
+  });
+
+  const expand = useCallback(
+    (projectId: string) => {
+      setExpanded((prev) => {
+        if (prev.has(projectId)) return prev;
+        const next = new Set(prev);
+        next.add(projectId);
+        try {
+          window.localStorage.setItem(storageKey, JSON.stringify([...next]));
+        } catch {
+          // ignore
+        }
+        return next;
+      });
+    },
+    [storageKey],
+  );
+
+  const toggle = useCallback(
+    (projectId: string) => {
+      setExpanded((prev) => {
+        const next = new Set(prev);
+        if (next.has(projectId)) next.delete(projectId);
+        else next.add(projectId);
+        try {
+          window.localStorage.setItem(storageKey, JSON.stringify([...next]));
+        } catch {
+          // ignore
+        }
+        return next;
+      });
+    },
+    [storageKey],
+  );
+
+  return { expanded, expand, toggle };
+}
+
 function useChiefState() {
   const rpc = useRpc<typeof rpcContract>();
   const connection = useRealtimeConnectionState();
@@ -1267,6 +1325,7 @@ function ChiefPanel({ subPath }: { subPath: string }) {
   const navigate = useBbNavigate();
   const { rpc, state, isLoading, refresh } = useChiefState();
   const [isStarting, setIsStarting] = useState(false);
+  const { expanded, expand, toggle } = useExpandedProjects();
 
   // The rail hides at any width, but it hides differently. Wide: a column you
   // collapse, and the choice sticks. Phone: single-pane, so the rail is a
@@ -1287,6 +1346,18 @@ function ChiefPanel({ subPath }: { subPath: string }) {
     // stays put.
     setDrawerOpen(false);
   };
+
+  // Keep the group that owns the open thread expanded so architects stay
+  // reachable without hunting. Persists so a later visit starts open too.
+  useEffect(() => {
+    if (!selected) return;
+    const owning = state.groups.find(
+      (group) =>
+        group.chief.threadId === selected ||
+        group.architects.some((a) => a.threadId === selected),
+    );
+    if (owning) expand(owning.projectId);
+  }, [selected, state.groups, expand]);
 
   useEffect(() => {
     if (isWide || !isDrawerOpen) return;
@@ -1395,12 +1466,11 @@ function ChiefPanel({ subPath }: { subPath: string }) {
             manages them.
           </p>
         ) : (
-          state.groups.map((group) => (
-            <div key={group.projectId}>
-              <RailRow
-                active={selected === group.chief.threadId}
-                onSelect={() => select(group.chief.threadId)}
-              >
+          state.groups.map((group) => {
+            const hasArchitects = group.architects.length > 0;
+            const isOpen = expanded.has(group.projectId);
+            const chiefBody = (
+              <>
                 <StatusDot status={group.chief.status} />
                 <span className="min-w-0 flex-1">
                   <span
@@ -1414,33 +1484,84 @@ function ChiefPanel({ subPath }: { subPath: string }) {
                     {group.chief.subtitle ?? group.projectName}
                   </span>
                 </span>
-              </RailRow>
-              {group.architects.map((architect) => (
-                <RailRow
-                  key={architect.threadId}
-                  indent
-                  active={selected === architect.threadId}
-                  onSelect={() => select(architect.threadId)}
-                >
-                  <StatusDot status={architect.status} />
-                  <span
-                    className={`min-w-0 flex-1 truncate text-xs ${
-                      architect.retired
-                        ? "text-muted-foreground/70"
-                        : "text-muted-foreground"
+              </>
+            );
+            return (
+              <div key={group.projectId}>
+                {hasArchitects ? (
+                  <div
+                    className={`flex w-full items-start gap-0.5 rounded-md ${
+                      selected === group.chief.threadId
+                        ? "bg-accent text-accent-foreground"
+                        : "text-foreground"
                     }`}
                   >
-                    {architect.taskKey ? (
-                      <span className="mr-1 rounded bg-muted px-1 py-0.5 text-[10px] font-medium text-foreground">
-                        {architect.taskKey}
-                      </span>
-                    ) : null}
-                    {architect.title}
-                  </span>
-                </RailRow>
-              ))}
-            </div>
-          ))
+                    <button
+                      type="button"
+                      aria-expanded={isOpen}
+                      aria-label={
+                        isOpen
+                          ? `Collapse architects for ${group.projectName}`
+                          : `Expand architects for ${group.projectName}`
+                      }
+                      onClick={() => toggle(group.projectId)}
+                      className="mt-1.5 shrink-0 rounded p-1 text-muted-foreground hover:bg-accent/50 hover:text-foreground md:mt-0.5"
+                    >
+                      <Icon
+                        name={isOpen ? "ChevronDown" : "ChevronRight"}
+                        className="size-3.5"
+                        aria-hidden="true"
+                      />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => select(group.chief.threadId)}
+                      className={`flex min-w-0 flex-1 items-start gap-2 rounded-md py-2.5 pr-2 text-left text-sm transition-colors md:py-1.5 ${
+                        selected === group.chief.threadId
+                          ? ""
+                          : "hover:bg-accent/50"
+                      }`}
+                    >
+                      {chiefBody}
+                    </button>
+                  </div>
+                ) : (
+                  <RailRow
+                    active={selected === group.chief.threadId}
+                    onSelect={() => select(group.chief.threadId)}
+                  >
+                    {chiefBody}
+                  </RailRow>
+                )}
+                {hasArchitects && isOpen
+                  ? group.architects.map((architect) => (
+                      <RailRow
+                        key={architect.threadId}
+                        indent
+                        active={selected === architect.threadId}
+                        onSelect={() => select(architect.threadId)}
+                      >
+                        <StatusDot status={architect.status} />
+                        <span
+                          className={`min-w-0 flex-1 truncate text-xs ${
+                            architect.retired
+                              ? "text-muted-foreground/70"
+                              : "text-muted-foreground"
+                          }`}
+                        >
+                          {architect.taskKey ? (
+                            <span className="mr-1 rounded bg-muted px-1 py-0.5 text-[10px] font-medium text-foreground">
+                              {architect.taskKey}
+                            </span>
+                          ) : null}
+                          {architect.title}
+                        </span>
+                      </RailRow>
+                    ))
+                  : null}
+              </div>
+            );
+          })
         )}
 
         {state.needsInput.length > 0 ? (
