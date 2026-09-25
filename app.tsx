@@ -52,6 +52,8 @@ import {
   untilLabel,
   type VoiceAvailability,
 } from "./card-parts";
+import { RailUsageLimits } from "./components/RailUsageLimits";
+import { useBbSidebarHidden } from "./hooks/useBbSidebarHidden";
 import { mountNavBadge } from "./nav-badge";
 import type {
   BoardCard,
@@ -1853,6 +1855,7 @@ function ChiefPanel({ subPath }: { subPath: string }) {
   const [isStarting, setIsStarting] = useState(false);
   const [railQuery, setRailQuery] = useState("");
   const { expanded, expand, toggle } = useExpandedProjects();
+  const bbSidebarHidden = useBbSidebarHidden();
 
   // The rail hides at any width, but it hides differently. Wide: a column you
   // collapse, and the choice sticks. Phone: single-pane, so the rail is a
@@ -1982,7 +1985,7 @@ function ChiefPanel({ subPath }: { subPath: string }) {
       ) : null}
 
       <aside
-        className={`z-20 min-w-0 flex-col overflow-y-auto border-border bg-background p-2 ${
+        className={`z-20 min-w-0 flex-col border-border bg-background p-2 ${
           isRailShown ? "flex" : "hidden"
         } ${
           isWide
@@ -1990,6 +1993,7 @@ function ChiefPanel({ subPath }: { subPath: string }) {
             : "absolute inset-y-0 left-0 w-[17rem] max-w-[85%] border-r shadow-lg"
         }`}
       >
+        <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="relative mb-1">
           <Icon
             name="Search"
@@ -2228,6 +2232,9 @@ function ChiefPanel({ subPath }: { subPath: string }) {
             on you.
           </p>
         ) : null}
+        </div>
+
+        {bbSidebarHidden ? <RailUsageLimits /> : null}
       </aside>
 
       <section className="flex min-h-0 min-w-0 flex-1 flex-col">
