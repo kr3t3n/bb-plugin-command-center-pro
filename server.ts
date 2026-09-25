@@ -26,6 +26,11 @@ import { z } from "zod";
 
 import { extractArtifacts, type Artifact } from "./lib/artifacts";
 import { previewMarkdown } from "./lib/markdown-preview";
+import {
+  normalizeProviderLimits,
+  providerLimitsResultSchema,
+  type ProviderLimitsResult,
+} from "./lib/provider-limits";
 import { isStalled, lastActivity } from "./lib/stall";
 
 import { parseVoiceCommand, type VoiceProject } from "./lib/voice-command";
@@ -561,6 +566,15 @@ export const rpcContract = defineRpcContract({
     output: z.object({ ok: z.boolean() }),
   },
   /**
+   * Codex, Anthropic, and Cursor quota still left — same source as sidebar-pro
+   * (`bb.sdk.system.usageLimits()`). No account email. Used by the Chief rail
+   * when the bb left sidebar is hidden.
+   */
+  providerLimits: {
+    input: z.object({}),
+    output: providerLimitsResultSchema,
+  },
+  /**
    * The harness/model preference for one task, for Chief to read over
    * cross-plugin rpc when handing work to an architect (see dispatchPreferenceFor).
    */
@@ -1055,6 +1069,14 @@ export default async function plugin(bb: BbPluginApi) {
   function publish(): void {
     bb.realtime.publish("changed", { at: Date.now() });
   }
+
+  /** Brief cache so the Chief rail can poll without hammering providers. */
+  const usageCache: { expiresAt: number; value: ProviderLimitsResult } = {
+    expiresAt: 0,
+    value: providerLimitsResultSchema.parse({
+      providers: normalizeProviderLimits(null),
+    }),
+  };
 
   // ---------------------------------------------------------------- chief
   // Ported in when chief-nav merged back into this plugin: one global Chief,
@@ -4615,6 +4637,28 @@ export default async function plugin(bb: BbPluginApi) {
       reloadRoles();
       publish();
       return { ok: changed > 0 };
+    },
+    async providerLimits() {
+      const now = Date.now();
+      if (now < usageCache.expiresAt) return usageCache.value;
+      try {
+        const raw = await bb.sdk.system.usageLimits();
+        const value = providerLimitsResultSchema.parse({
+          providers: normalizeProviderLimits(raw),
+        });
+        usageCache.expiresAt = now + 45_000;
+        usageCache.value = value;
+        return value;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "unknown";
+        bb.log.warn(`provider usage read failed: ${message}`);
+        const value = providerLimitsResultSchema.parse({
+          providers: normalizeProviderLimits(null),
+        });
+        usageCache.expiresAt = now + 15_000;
+        usageCache.value = value;
+        return value;
+      }
     },
     async setDispatchDefault({ providerId, model }) {
       await bb.storage.kv.set("dispatch-default", {
