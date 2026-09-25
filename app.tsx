@@ -1414,6 +1414,30 @@ function ChiefPanel({ subPath }: { subPath: string }) {
                     {group.chief.subtitle ?? group.projectName}
                   </span>
                 </span>
+                {group.activeCount > 0 || group.pendingCount > 0 ? (
+                  <span
+                    className="mt-0.5 shrink-0 text-[10px] tabular-nums text-muted-foreground"
+                    title={`${group.activeCount} active · ${group.pendingCount} pending`}
+                  >
+                    {group.activeCount > 0 ? (
+                      <span className="text-foreground/80">
+                        {group.activeCount}
+                        <span className="ml-0.5 font-normal text-muted-foreground">
+                          active
+                        </span>
+                      </span>
+                    ) : null}
+                    {group.activeCount > 0 && group.pendingCount > 0 ? (
+                      <span className="mx-1 text-muted-foreground/50">·</span>
+                    ) : null}
+                    {group.pendingCount > 0 ? (
+                      <span>
+                        {group.pendingCount}
+                        <span className="ml-0.5">pending</span>
+                      </span>
+                    ) : null}
+                  </span>
+                ) : null}
               </RailRow>
               {group.architects.map((architect) => (
                 <RailRow
