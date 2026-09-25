@@ -1469,70 +1469,71 @@ function ChiefPanel({ subPath }: { subPath: string }) {
           state.groups.map((group) => {
             const hasArchitects = group.architects.length > 0;
             const isOpen = expanded.has(group.projectId);
-            const chiefBody = (
-              <>
-                <StatusDot status={group.chief.status} />
-                <span className="min-w-0 flex-1">
-                  <span
-                    className={`block truncate ${
-                      group.chief.retired ? "text-muted-foreground" : ""
-                    }`}
-                  >
-                    {group.chief.title}
-                  </span>
-                  <span className="block truncate text-xs text-muted-foreground">
-                    {group.chief.subtitle ?? group.projectName}
-                  </span>
-                </span>
-              </>
-            );
+            const openChief = () => select(group.chief.threadId);
+            const onNameClick = () => {
+              if (hasArchitects) toggle(group.projectId);
+              else openChief();
+            };
             return (
               <div key={group.projectId}>
-                {hasArchitects ? (
-                  <div
-                    className={`flex w-full items-start gap-0.5 rounded-md ${
+                <div
+                  className={`flex w-full items-start gap-0.5 rounded-md ${
+                    selected === group.chief.threadId
+                      ? "bg-accent text-accent-foreground"
+                      : "text-foreground"
+                  }`}
+                >
+                  <button
+                    type="button"
+                    aria-expanded={hasArchitects ? isOpen : undefined}
+                    aria-label={
+                      hasArchitects
+                        ? isOpen
+                          ? `Collapse ${group.projectName}`
+                          : `Expand ${group.projectName}`
+                        : undefined
+                    }
+                    onClick={onNameClick}
+                    className={`flex min-w-0 flex-1 items-start gap-2 rounded-md py-2.5 pl-2 pr-1 text-left text-sm transition-colors md:py-1.5 ${
                       selected === group.chief.threadId
-                        ? "bg-accent text-accent-foreground"
-                        : "text-foreground"
+                        ? ""
+                        : "hover:bg-accent/50"
                     }`}
                   >
-                    <button
-                      type="button"
-                      aria-expanded={isOpen}
-                      aria-label={
-                        isOpen
-                          ? `Collapse architects for ${group.projectName}`
-                          : `Expand architects for ${group.projectName}`
-                      }
-                      onClick={() => toggle(group.projectId)}
-                      className="mt-1.5 shrink-0 rounded p-1 text-muted-foreground hover:bg-accent/50 hover:text-foreground md:mt-0.5"
-                    >
+                    {hasArchitects ? (
                       <Icon
                         name={isOpen ? "ChevronDown" : "ChevronRight"}
-                        className="size-3.5"
+                        className="mt-0.5 size-3.5 shrink-0 text-muted-foreground"
                         aria-hidden="true"
                       />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => select(group.chief.threadId)}
-                      className={`flex min-w-0 flex-1 items-start gap-2 rounded-md py-2.5 pr-2 text-left text-sm transition-colors md:py-1.5 ${
-                        selected === group.chief.threadId
-                          ? ""
-                          : "hover:bg-accent/50"
-                      }`}
-                    >
-                      {chiefBody}
-                    </button>
-                  </div>
-                ) : (
-                  <RailRow
-                    active={selected === group.chief.threadId}
-                    onSelect={() => select(group.chief.threadId)}
+                    ) : null}
+                    <StatusDot status={group.chief.status} />
+                    <span className="min-w-0 flex-1">
+                      <span
+                        className={`block truncate ${
+                          group.chief.retired ? "text-muted-foreground" : ""
+                        }`}
+                      >
+                        {group.chief.title}
+                      </span>
+                      <span className="block truncate text-xs text-muted-foreground">
+                        {group.chief.subtitle ?? group.projectName}
+                      </span>
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Open thread for ${group.chief.title}`}
+                    onClick={openChief}
+                    className="mt-1.5 shrink-0 rounded p-1 text-muted-foreground hover:bg-accent/50 hover:text-foreground md:mt-0.5"
                   >
-                    {chiefBody}
-                  </RailRow>
-                )}
+                    <Icon
+                      name="ArrowUpRight"
+                      className="size-3.5"
+                      aria-hidden="true"
+                    />
+                  </button>
+                </div>
                 {hasArchitects && isOpen
                   ? group.architects.map((architect) => (
                       <RailRow
