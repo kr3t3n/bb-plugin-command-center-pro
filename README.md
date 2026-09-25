@@ -1,3 +1,9 @@
+# bb-plugin-command-center-pro
+
+Georgi's fork of [dilipgv/bb-plugin-command-center](https://github.com/dilipgv/bb-plugin-command-center), based on v0.7.1.
+The plugin keeps the id `command-center`, so it replaces the upstream plugin in place and keeps its board data.
+Do not push to the upstream repo.
+
 # bb-plugin-command-center
 
 ![Board](docs/screenshots/board.png)
