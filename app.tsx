@@ -1469,6 +1469,22 @@ function useExpandedProjects() {
   return { expanded, expand, toggle };
 }
 
+/**
+ * Project-chief BB threads keep titles like "Project chief — Acme". The rail
+ * and open-thread header show the project name only; the stored title stays.
+ */
+const PROJECT_CHIEF_TITLE_PREFIX = "Project chief — ";
+
+function projectChiefDisplayTitle(
+  title: string,
+  projectName?: string | null,
+): string {
+  if (title.startsWith(PROJECT_CHIEF_TITLE_PREFIX)) {
+    return title.slice(PROJECT_CHIEF_TITLE_PREFIX.length);
+  }
+  return projectName || title;
+}
+
 function useChiefState() {
   const rpc = useRpc<typeof rpcContract>();
   const connection = useRealtimeConnectionState();
@@ -1639,8 +1655,12 @@ function ChiefPanel({ subPath }: { subPath: string }) {
     await refresh();
   };
 
+  const openTitle =
+    open?.role === "Project chief"
+      ? projectChiefDisplayTitle(open.entry.title, open.project)
+      : open?.entry.title;
   const openLabel = open
-    ? `${open.entry.taskKey ? `${open.entry.taskKey} — ` : ""}${open.entry.title}`
+    ? `${open.entry.taskKey ? `${open.entry.taskKey} — ` : ""}${openTitle}`
     : "Chief";
 
   const phoneDrawerOpen = !isWide && (isDrawerOpen || isCapsDrawerOpen);
@@ -1784,7 +1804,10 @@ function ChiefPanel({ subPath }: { subPath: string }) {
                           group.chief.retired ? "text-muted-foreground" : ""
                         }`}
                       >
-                        {group.chief.title}
+                        {projectChiefDisplayTitle(
+                          group.chief.title,
+                          group.projectName,
+                        )}
                       </span>
                       <span className="block truncate text-xs text-muted-foreground">
                         {group.chief.subtitle ?? group.projectName}
@@ -1817,7 +1840,7 @@ function ChiefPanel({ subPath }: { subPath: string }) {
                   </button>
                   <button
                     type="button"
-                    aria-label={`Open thread for ${group.chief.title}`}
+                    aria-label={`Open thread for ${projectChiefDisplayTitle(group.chief.title, group.projectName)}`}
                     onClick={openChief}
                     className="mt-1.5 shrink-0 rounded p-1 text-muted-foreground hover:bg-accent/50 hover:text-foreground md:mt-0.5"
                   >
