@@ -250,6 +250,10 @@ const projectGroup = z.object({
   projectName: z.string(),
   chief: navThread,
   architects: z.array(navThread),
+  /** BB Tasks in `in_progress` on tracker project(s) linked to this BB project. */
+  activeCount: z.number().int().nonnegative(),
+  /** BB Tasks in `backlog` or `todo` (open, not started) on those trackers. */
+  pendingCount: z.number().int().nonnegative(),
 });
 
 export type ChiefNavThread = z.infer<typeof navThread>;
@@ -1629,6 +1633,7 @@ export default async function plugin(bb: BbPluginApi) {
     const chief = chiefRow();
     const chiefLive = chief ? await statusOf(chief.thread_id) : null;
     const projects = await listChiefProjects();
+    const taskCounts = await taskCountsByBbProject();
     const groups: z.infer<typeof projectGroup>[] = [];
 
     for (const project of projects) {
@@ -1650,6 +1655,7 @@ export default async function plugin(bb: BbPluginApi) {
           };
         }),
       );
+      const counts = taskCounts.get(project.id) ?? { active: 0, pending: 0 };
       groups.push({
         projectId: project.id,
         projectName: project.name,
@@ -1663,6 +1669,8 @@ export default async function plugin(bb: BbPluginApi) {
           createdAt: row.created_at,
         },
         architects: architects.filter((entry) => entry.status !== null),
+        activeCount: counts.active,
+        pendingCount: counts.pending,
       });
     }
 
@@ -2863,6 +2871,76 @@ export default async function plugin(bb: BbPluginApi) {
       if (cursor === null) break;
     }
     return rows;
+  }
+
+  /**
+   * Active (`in_progress`) and pending (`backlog`|`todo`) task counts per BB
+   * project, from tracker projects linked via `linkedBbProjectId`. One
+   * listProjects + one status-filtered listTasks — not a full task dump.
+   * Failures return an empty map so the rail still renders.
+   */
+  async function taskCountsByBbProject(): Promise<
+    Map<string, { active: number; pending: number }>
+  > {
+    const counts = new Map<string, { active: number; pending: number }>();
+    try {
+      const { projects: trackers } = await tasksCall(
+        "listProjects",
+        {},
+        z.object({
+          projects: z.array(
+            z.looseObject({
+              id: z.string(),
+              linkedBbProjectId: z.string().nullish(),
+            }),
+          ),
+        }),
+      );
+      const trackerToBb = new Map<string, string>();
+      for (const tracker of trackers) {
+        const bbId = tracker.linkedBbProjectId;
+        if (typeof bbId === "string" && bbId.startsWith("proj_")) {
+          trackerToBb.set(tracker.id, bbId);
+        }
+      }
+      if (trackerToBb.size === 0) return counts;
+
+      const rows: TaskRow[] = [];
+      let cursor: string | null = null;
+      for (let page = 0; page < MAX_TASK_PAGES; page += 1) {
+        const result: TaskPage = await tasksCall(
+          "listTasks",
+          {
+            statuses: ["backlog", "todo", "in_progress"],
+            limit: 500,
+            ...(cursor !== null ? { cursor } : {}),
+          },
+          taskPageSchema,
+        );
+        rows.push(...result.tasks);
+        cursor = result.nextCursor;
+        if (cursor === null) break;
+      }
+
+      for (const task of rows) {
+        const trackerId = task.projectId;
+        if (trackerId === undefined || trackerId === null) continue;
+        const bbId = trackerToBb.get(trackerId);
+        if (bbId === undefined) continue;
+        let entry = counts.get(bbId);
+        if (entry === undefined) {
+          entry = { active: 0, pending: 0 };
+          counts.set(bbId, entry);
+        }
+        if (task.status === "in_progress") entry.active += 1;
+        else if (task.status === "backlog" || task.status === "todo") {
+          entry.pending += 1;
+        }
+      }
+    } catch (error) {
+      bb.log.warn(`Chief rail task counts unavailable: ${String(error)}`);
+    }
+    return counts;
   }
 
   async function taskWorkers(
