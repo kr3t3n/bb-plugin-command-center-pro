@@ -1186,6 +1186,8 @@ function providerLabel(providerId: string): string {
 /**
  * The agent provider a rail row's thread runs on. Prefers the host logo from
  * experimental_useProviders; falls back to a short local mark, then text.
+ * Logos are drawn as a CSS mask so they take the theme foreground (light on
+ * dark, dark on light) instead of the brand colour from the SVG.
  */
 function ProviderIcon({ providerId }: { providerId: string | null }) {
   const { providers } = experimental_useProviders();
@@ -1201,6 +1203,17 @@ function ProviderIcon({ providerId }: { providerId: string | null }) {
   useEffect(() => {
     setLogoFailed(false);
   }, [providerId, logoUrl]);
+
+  // Probe the URL: a CSS mask paints an empty box on failure, so we need an
+  // explicit error path into the text mark.
+  useEffect(() => {
+    if (logoUrl === null || logoFailed) return;
+    const probe = new Image();
+    const onError = () => setLogoFailed(true);
+    probe.addEventListener("error", onError);
+    probe.src = logoUrl;
+    return () => probe.removeEventListener("error", onError);
+  }, [logoUrl, logoFailed]);
 
   const showLogo = logoUrl !== null && !logoFailed;
 
@@ -1218,15 +1231,25 @@ function ProviderIcon({ providerId }: { providerId: string | null }) {
   }
 
   if (showLogo) {
+    const mask = {
+      maskImage: `url("${logoUrl}")`,
+      maskPosition: "center",
+      maskRepeat: "no-repeat",
+      maskSize: "contain",
+      WebkitMaskImage: `url("${logoUrl}")`,
+      WebkitMaskPosition: "center",
+      WebkitMaskRepeat: "no-repeat",
+      WebkitMaskSize: "contain",
+    } as const;
     return (
-      <img
-        src={logoUrl}
-        alt=""
+      <span
+        role="img"
         title={label}
         aria-label={label}
-        className="mt-0.5 size-4 shrink-0 object-contain"
-        onError={() => setLogoFailed(true)}
-      />
+        className="mt-0.5 flex size-4 shrink-0 items-center justify-center"
+      >
+        <span className="size-3.5 bg-foreground" style={mask} />
+      </span>
     );
   }
 
@@ -1236,7 +1259,7 @@ function ProviderIcon({ providerId }: { providerId: string | null }) {
       role="img"
       title={label}
       aria-label={label}
-      className="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded bg-muted text-[9px] font-medium leading-none text-muted-foreground"
+      className="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded bg-muted text-[9px] font-medium leading-none text-foreground"
     >
       {mark}
     </span>
