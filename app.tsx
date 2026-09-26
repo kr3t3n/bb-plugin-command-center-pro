@@ -2069,7 +2069,7 @@ function ChiefPanel({ subPath }: { subPath: string }) {
             return (
               <div key={group.projectId}>
                 <div
-                  className={`flex w-full items-start gap-0.5 rounded-md ${
+                  className={`flex w-full items-center gap-0.5 rounded-md ${
                     selected === group.chief.threadId
                       ? "bg-accent text-accent-foreground"
                       : "text-foreground"
@@ -2145,11 +2145,11 @@ function ChiefPanel({ subPath }: { subPath: string }) {
                     type="button"
                     aria-label={`Open thread for ${projectChiefDisplayTitle(group.chief.title, group.projectName)}`}
                     onClick={openChief}
-                    className="mt-1.5 shrink-0 rounded p-1 text-muted-foreground hover:bg-accent/50 hover:text-foreground md:mt-0.5"
+                    className="mr-0.5 shrink-0 self-center rounded-md p-1.5 text-muted-foreground hover:bg-accent/50 hover:text-foreground"
                   >
                     <Icon
                       name="ArrowUpRight"
-                      className="size-3.5"
+                      className="size-5"
                       aria-hidden="true"
                     />
                   </button>
